@@ -6,19 +6,19 @@ import (
 	"github.com/webcore-go/webcore/port"
 )
 
-type RabbitMLoader struct {
+type RabbitMQLoader struct {
 	name string
 }
 
-func (a *RabbitMLoader) SetName(name string) {
+func (a *RabbitMQLoader) SetName(name string) {
 	a.name = name
 }
 
-func (a *RabbitMLoader) Name() string {
+func (a *RabbitMQLoader) Name() string {
 	return a.name
 }
 
-func (l *RabbitMLoader) Init(args ...any) (port.Library, error) {
+func (l *RabbitMQLoader) Init(args ...any) (port.Library, error) {
 	ctx := args[0].(context.Context)
 	cfg := args[1].(RabbitMQConfig)
 
