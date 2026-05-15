@@ -1,4 +1,4 @@
-module github.com/webcore-go/lib-rabbitmq
+module github.com/webcore-go/lib-pubsub-rabbit
 
 go 1.25.0
 
