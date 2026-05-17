@@ -58,6 +58,8 @@ github.com/valyala/fasthttp v1.69.0 h1:fNLLESD2SooWeh2cidsuFtOcrEi4uB4m1mPrkJMZy
 github.com/valyala/fasthttp v1.69.0/go.mod h1:4wA4PfAraPlAsJ5jMSqCE2ug5tqUPwKXxVj8oNECGcw=
 github.com/webcore-go/webcore v0.0.22 h1:vQzSuOPAz9BqLmfMlQxfnpLAsZaQ0Ay4zZFv5p+2+ZY=
 github.com/webcore-go/webcore v0.0.22/go.mod h1:SSwl4+udSE7JZCdWj9FjPgW4FCJjSWVxtkbXRQFyXeI=
+github.com/webcore-go/webcore v0.0.27 h1:8nfyJj2QVAMJFEcaGmnqcUDl2gr2s4RSYeHxvK7Ko5g=
+github.com/webcore-go/webcore v0.0.27/go.mod h1:+0dZ/Wk2Kx1Sb2A+tkMhd3ph7KxfzAZ/+m/UNSUpZhU=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 go.uber.org/goleak v1.3.0 h1:2K3zAYmnTNqV73imy9J1T3WC+gmCePx2hEGkimedGto=

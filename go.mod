@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/rabbitmq/amqp091-go v1.10.0
-	github.com/webcore-go/webcore v0.0.22
+	github.com/webcore-go/webcore v0.0.27
 )
 
 require (
