@@ -237,6 +237,7 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 				attempt++
 				delay := r.reconnectDelay(attempt)
 				logger.Error("Failed to setup RabbitMQ consumer", "error", err, "retryIn", delay)
+				r.forceCloseConnection()
 				select {
 				case <-ctx.Done():
 					return
@@ -244,6 +245,7 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 				}
 				continue
 			}
+			attempt = 0
 
 			msgs, err := r.Channel.Consume(queueName, "", false, false, false, false, nil)
 			if err != nil {
@@ -260,6 +262,7 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 			}
 
 			logger.Info("RabbitMQ delivery channel closed, will attempt to reconnect...")
+			r.forceCloseConnection()
 		}
 	}()
 }
