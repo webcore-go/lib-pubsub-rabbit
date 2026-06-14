@@ -339,6 +339,7 @@ func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Deliver
 	sem := make(chan struct{}, workers)
 	var wg sync.WaitGroup
 
+	workerPool := make([]bool, workers)
 	for {
 		select {
 		case <-ctx.Done():
@@ -357,13 +358,26 @@ func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Deliver
 				return
 			}
 
+			workerID := -1
+			for i := range workers {
+				if !workerPool[i] {
+					workerID = i
+					break
+				}
+			}
+
 			wg.Add(1)
-			go func(d amqp.Delivery) {
+			go func(workerID int, d amqp.Delivery) {
+				workerPool[workerID] = true // acquare
+
 				defer wg.Done()
 				defer func() { <-sem }()
 
+				logger.Info("Worker processing message", "workerID", workerID, "messageID", d.MessageId)
 				r.handleMessage(ctx, d)
-			}(msg)
+
+				workerPool[workerID] = false // release
+			}(workerID, msg)
 		}
 	}
 }
