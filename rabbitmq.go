@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -334,50 +335,73 @@ func (r *RabbitMQ) setupConsumer() (string, error) {
 }
 
 func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Delivery) {
+	workers := r.Config.GetWorkers()
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+
 	for {
 		select {
 		case <-ctx.Done():
+			wg.Wait()
 			return
 		case msg, ok := <-msgs:
 			if !ok {
+				wg.Wait()
 				return
 			}
 
-			attributes := make(map[string]string)
-			for k, v := range msg.Headers {
-				if s, ok := v.(string); ok {
-					attributes[k] = s
-				}
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				wg.Wait()
+				return
 			}
 
-			m := &RabbitMQMessage{
-				ID:          msg.MessageId,
-				Data:        msg.Body,
-				PublishTime: msg.Timestamp,
-				Attributes:  attributes,
-			}
+			wg.Add(1)
+			go func(d amqp.Delivery) {
+				defer wg.Done()
+				defer func() { <-sem }()
 
-			if m.ID == "" {
-				m.ID = fmt.Sprintf("%d-%d", msg.DeliveryTag, time.Now().UnixNano())
-			}
+				r.handleMessage(ctx, d)
+			}(msg)
+		}
+	}
+}
 
-			ackDone := false
-			for _, c := range r.Receivers {
-				ack, err := c.Consume(ctx, []port.IPubSubMessage{m})
-				if !ackDone && err == nil && len(ack) > 0 {
-					if val, ok := ack[m.ID]; ok && val {
-						ackDone = true
-						msg.Ack(false)
-						logger.Debug("Message processed and acknowledged", "messageID", m.ID)
-					}
-				}
-			}
+func (r *RabbitMQ) handleMessage(ctx context.Context, msg amqp.Delivery) {
+	attributes := make(map[string]string)
+	for k, v := range msg.Headers {
+		if s, ok := v.(string); ok {
+			attributes[k] = s
+		}
+	}
 
-			if !ackDone {
-				msg.Nack(false, true)
-				logger.Debug("Message not processed and not acknowledged", "messageID", m.ID)
+	m := &RabbitMQMessage{
+		ID:          msg.MessageId,
+		Data:        msg.Body,
+		PublishTime: msg.Timestamp,
+		Attributes:  attributes,
+	}
+
+	if m.ID == "" {
+		m.ID = fmt.Sprintf("%d-%d", msg.DeliveryTag, time.Now().UnixNano())
+	}
+
+	ackDone := false
+	for _, c := range r.Receivers {
+		ack, err := c.Consume(ctx, []port.IPubSubMessage{m})
+		if !ackDone && err == nil && len(ack) > 0 {
+			if val, ok := ack[m.ID]; ok && val {
+				ackDone = true
+				msg.Ack(false)
+				logger.Debug("Message processed and acknowledged", "messageID", m.ID)
 			}
 		}
+	}
+
+	if !ackDone {
+		msg.Nack(false, true)
+		logger.Debug("Message not processed and not acknowledged", "messageID", m.ID)
 	}
 }
 
@@ -432,8 +456,14 @@ func (r *RabbitMQ) declareTopology() error {
 		}
 	}
 
-	if r.Config.PrefetchCount > 0 {
-		err := r.Channel.Qos(r.Config.PrefetchCount, 0, false)
+	prefetchCount := r.Config.PrefetchCount
+	workers := r.Config.GetWorkers()
+	if prefetchCount <= 0 && workers > 1 {
+		prefetchCount = workers
+	}
+
+	if prefetchCount > 0 {
+		err := r.Channel.Qos(prefetchCount, 0, false)
 		if err != nil {
 			return fmt.Errorf("failed to set RabbitMQ QoS: %v", err)
 		}

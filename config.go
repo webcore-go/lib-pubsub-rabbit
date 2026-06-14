@@ -18,6 +18,7 @@ type RabbitMQConfig struct {
 	PrefetchCount        int                   `mapstructure:"prefetch_count"`
 	MaxReconnectAttempts int                   `mapstructure:"max_reconnect_attempts"`
 	Producer             config.ProducerConfig `mapstructure:"producer"`
+	Workers              int                   `mapstructure:"workers" json:"workers"` // jumlah worker paralel untuk proses message
 }
 
 func (c *RabbitMQConfig) GetMaxReconnectAttempts() int {
@@ -25,6 +26,13 @@ func (c *RabbitMQConfig) GetMaxReconnectAttempts() int {
 		return c.MaxReconnectAttempts
 	}
 	return 4
+}
+
+func (c *RabbitMQConfig) GetWorkers() int {
+	if c.Workers > 0 {
+		return c.Workers
+	}
+	return 1
 }
 
 func (c *RabbitMQConfig) SetEnvBindings() map[string]string {
@@ -39,6 +47,7 @@ func (c *RabbitMQConfig) SetEnvBindings() map[string]string {
 		"rabbitmq.prefetch_count":         "RABBITMQ_PREFETCH_COUNT",
 		"rabbitmq.max_reconnect_attempts": "RABBITMQ_MAX_RECONNECT_ATTEMPTS",
 		"rabbitmq.producer.attributes":    "PUBSUB_PRODUCER_ATTRIBUTES",
+		"rabbitmq.consumer.workers":       "MODULE_CONSUMER_WORKERS",
 	}
 }
 
@@ -54,5 +63,6 @@ func (c *RabbitMQConfig) SetDefaults() map[string]any {
 		"rabbitmq.prefetch_count":         0,
 		"rabbitmq.max_reconnect_attempts": 4,
 		"rabbitmq.producer.attributes":    make(map[string]string),
+		"rabbitmq.consumer.workers":       1,
 	}
 }
