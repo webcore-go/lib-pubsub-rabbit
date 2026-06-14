@@ -336,48 +336,39 @@ func (r *RabbitMQ) setupConsumer() (string, error) {
 
 func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Delivery) {
 	workers := r.Config.GetWorkers()
-	sem := make(chan struct{}, workers)
+	work := make(chan amqp.Delivery)
 	var wg sync.WaitGroup
 
-	workerPool := make([]bool, workers)
+	for i := range workers {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			for d := range work {
+				logger.Info("Worker processing message", "workerID", workerID, "messageID", d.MessageId)
+				r.handleMessage(ctx, d)
+			}
+		}(i)
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
+			close(work)
 			wg.Wait()
 			return
 		case msg, ok := <-msgs:
 			if !ok {
+				close(work)
 				wg.Wait()
 				return
 			}
-
 			select {
-			case sem <- struct{}{}:
+			case work <- msg:
 			case <-ctx.Done():
+				close(work)
 				wg.Wait()
 				return
 			}
-
-			workerID := -1
-			for i := range workers {
-				if !workerPool[i] {
-					workerID = i
-					break
-				}
-			}
-
-			wg.Add(1)
-			go func(workerID int, d amqp.Delivery) {
-				workerPool[workerID] = true // acquare
-
-				defer wg.Done()
-				defer func() { <-sem }()
-
-				logger.Info("Worker processing message", "workerID", workerID, "messageID", d.MessageId)
-				r.handleMessage(ctx, d)
-
-				workerPool[workerID] = false // release
-			}(workerID, msg)
 		}
 	}
 }
