@@ -207,9 +207,69 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 		return
 	}
 
+	go func() {
+		var attempt int
+		for {
+			if ctx.Err() != nil {
+				logger.Info("RabbitMQ consumer stopped")
+				return
+			}
+
+			if r.Connection == nil || r.Connection.IsClosed() {
+				logger.Info("RabbitMQ connection lost, attempting to reconnect...")
+				if err := r.Connect(); err != nil {
+					attempt++
+					delay := r.reconnectDelay(attempt)
+					logger.Error("Failed to reconnect to RabbitMQ", "attempt", attempt, "error", err, "retryIn", delay)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(delay):
+					}
+					continue
+				}
+				attempt = 0
+				logger.Info("RabbitMQ reconnected successfully")
+			}
+
+			queueName, err := r.setupConsumer()
+			if err != nil {
+				attempt++
+				delay := r.reconnectDelay(attempt)
+				logger.Error("Failed to setup RabbitMQ consumer", "error", err, "retryIn", delay)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
+				continue
+			}
+
+			msgs, err := r.Channel.Consume(queueName, "", false, false, false, false, nil)
+			if err != nil {
+				logger.Error("Failed to start consuming RabbitMQ queue", "error", err)
+				r.forceCloseConnection()
+				continue
+			}
+
+			r.processMessages(ctx, msgs)
+
+			if ctx.Err() != nil {
+				logger.Info("RabbitMQ consumer stopped")
+				return
+			}
+
+			logger.Info("RabbitMQ delivery channel closed, will attempt to reconnect...")
+		}
+	}()
+}
+
+func (r *RabbitMQ) setupConsumer() (string, error) {
 	var queueName string
 
-	if r.Config.ExchangeType != "none" {
+	if r.Config.ExchangeType == "none" {
+		queueName = r.Config.Topic
+	} else {
 		queueName = r.Config.Subscription
 		_, err := r.Channel.QueueDeclare(
 			queueName,
@@ -220,8 +280,7 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 			amqp.Table{},
 		)
 		if err != nil {
-			logger.Error("Failed to declare RabbitMQ queue", "queue", queueName, "error", err)
-			return
+			return "", fmt.Errorf("failed to declare RabbitMQ queue %s: %v", queueName, err)
 		}
 
 		exchangeName := r.Config.Topic
@@ -230,22 +289,19 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 		case "fanout":
 			err = r.Channel.QueueBind(queueName, "", exchangeName, false, nil)
 			if err != nil {
-				logger.Error("Failed to bind queue to fanout exchange", "queue", queueName, "exchange", exchangeName, "error", err)
-				return
+				return "", fmt.Errorf("failed to bind queue to fanout exchange: %v", err)
 			}
 
 		case "direct":
 			err = r.Channel.QueueBind(queueName, r.Config.Subscription, exchangeName, false, nil)
 			if err != nil {
-				logger.Error("Failed to bind queue to direct exchange", "queue", queueName, "exchange", exchangeName, "routingKey", r.Config.Subscription, "error", err)
-				return
+				return "", fmt.Errorf("failed to bind queue to direct exchange: %v", err)
 			}
 
 		case "topic":
 			err = r.Channel.QueueBind(queueName, r.Config.Subscription, exchangeName, false, nil)
 			if err != nil {
-				logger.Error("Failed to bind queue to topic exchange", "queue", queueName, "exchange", exchangeName, "routingKey", r.Config.Subscription, "error", err)
-				return
+				return "", fmt.Errorf("failed to bind queue to topic exchange: %v", err)
 			}
 
 		case "headers":
@@ -258,67 +314,82 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 			}
 			err = r.Channel.QueueBind(queueName, "", exchangeName, false, args)
 			if err != nil {
-				logger.Error("Failed to bind queue to headers exchange", "queue", queueName, "exchange", exchangeName, "error", err)
-				return
+				return "", fmt.Errorf("failed to bind queue to headers exchange: %v", err)
 			}
 		}
 	}
 
-	msgs, err := r.Channel.Consume(queueName, "", false, false, false, false, nil)
-	if err != nil {
-		logger.Error("Failed to start consuming RabbitMQ queue", "error", err)
-		return
-	}
+	return queueName, nil
+}
 
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				logger.Info("RabbitMQ consumer stopped")
+func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Delivery) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg, ok := <-msgs:
+			if !ok {
 				return
-			case msg, ok := <-msgs:
-				if !ok {
-					logger.Info("RabbitMQ channel closed")
-					return
-				}
+			}
 
-				attributes := make(map[string]string)
-				for k, v := range msg.Headers {
-					if s, ok := v.(string); ok {
-						attributes[k] = s
-					}
-				}
-
-				m := &RabbitMQMessage{
-					ID:          msg.MessageId,
-					Data:        msg.Body,
-					PublishTime: msg.Timestamp,
-					Attributes:  attributes,
-				}
-
-				if m.ID == "" {
-					m.ID = fmt.Sprintf("%d-%d", msg.DeliveryTag, time.Now().UnixNano())
-				}
-
-				ackDone := false
-				for _, c := range r.Receivers {
-					ack, err := c.Consume(ctx, []port.IPubSubMessage{m})
-					if !ackDone && err == nil && len(ack) > 0 {
-						if val, ok := ack[m.ID]; ok && val {
-							ackDone = true
-							msg.Ack(false)
-							logger.Debug("Message processed and acknowledged", "messageID", m.ID)
-						}
-					}
-				}
-
-				if !ackDone {
-					msg.Nack(false, true)
-					logger.Debug("Message not processed and not acknowledged", "messageID", m.ID)
+			attributes := make(map[string]string)
+			for k, v := range msg.Headers {
+				if s, ok := v.(string); ok {
+					attributes[k] = s
 				}
 			}
+
+			m := &RabbitMQMessage{
+				ID:          msg.MessageId,
+				Data:        msg.Body,
+				PublishTime: msg.Timestamp,
+				Attributes:  attributes,
+			}
+
+			if m.ID == "" {
+				m.ID = fmt.Sprintf("%d-%d", msg.DeliveryTag, time.Now().UnixNano())
+			}
+
+			ackDone := false
+			for _, c := range r.Receivers {
+				ack, err := c.Consume(ctx, []port.IPubSubMessage{m})
+				if !ackDone && err == nil && len(ack) > 0 {
+					if val, ok := ack[m.ID]; ok && val {
+						ackDone = true
+						msg.Ack(false)
+						logger.Debug("Message processed and acknowledged", "messageID", m.ID)
+					}
+				}
+			}
+
+			if !ackDone {
+				msg.Nack(false, true)
+				logger.Debug("Message not processed and not acknowledged", "messageID", m.ID)
+			}
 		}
-	}()
+	}
+}
+
+func (r *RabbitMQ) reconnectDelay(attempt int) time.Duration {
+	delay := time.Duration(attempt) * 2 * time.Second
+	if delay > 30*time.Second {
+		delay = 30 * time.Second
+	}
+	if delay < 2*time.Second {
+		delay = 2 * time.Second
+	}
+	return delay
+}
+
+func (r *RabbitMQ) forceCloseConnection() {
+	if r.Channel != nil {
+		r.Channel.Close()
+		r.Channel = nil
+	}
+	if r.Connection != nil {
+		r.Connection.Close()
+		r.Connection = nil
+	}
 }
 
 func (r *RabbitMQ) declareTopology() error {
