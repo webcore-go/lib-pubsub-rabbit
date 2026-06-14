@@ -219,6 +219,10 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 				logger.Info("RabbitMQ connection lost, attempting to reconnect...")
 				if err := r.Connect(); err != nil {
 					attempt++
+					if attempt >= r.Config.GetMaxReconnectAttempts() {
+						logger.Error("RabbitMQ max reconnect attempts reached, exiting", "attempts", attempt)
+						panic(fmt.Sprintf("RabbitMQ failed to reconnect after %d attempts", attempt))
+					}
 					delay := r.reconnectDelay(attempt)
 					logger.Error("Failed to reconnect to RabbitMQ", "attempt", attempt, "error", err, "retryIn", delay)
 					select {
@@ -235,6 +239,10 @@ func (r *RabbitMQ) StartReceiving(ctx context.Context) {
 			queueName, err := r.setupConsumer()
 			if err != nil {
 				attempt++
+				if attempt >= r.Config.GetMaxReconnectAttempts() {
+					logger.Error("RabbitMQ max reconnect attempts reached, exiting", "attempts", attempt)
+					panic(fmt.Sprintf("RabbitMQ failed to setup consumer after %d attempts", attempt))
+				}
 				delay := r.reconnectDelay(attempt)
 				logger.Error("Failed to setup RabbitMQ consumer", "error", err, "retryIn", delay)
 				r.forceCloseConnection()
