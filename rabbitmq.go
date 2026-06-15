@@ -336,7 +336,7 @@ func (r *RabbitMQ) setupConsumer() (string, error) {
 
 func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Delivery) {
 	workers := r.Config.GetWorkers()
-	work := make(chan amqp.Delivery)
+	work := make(chan amqp.Delivery, workers)
 	var wg sync.WaitGroup
 
 	for i := range workers {
@@ -350,27 +350,26 @@ func (r *RabbitMQ) processMessages(ctx context.Context, msgs <-chan amqp.Deliver
 		}(i)
 	}
 
+loop:
 	for {
 		select {
 		case <-ctx.Done():
-			close(work)
-			wg.Wait()
-			return
+			break loop
 		case msg, ok := <-msgs:
 			if !ok {
-				close(work)
-				wg.Wait()
-				return
+				break loop
 			}
 			select {
 			case work <- msg:
 			case <-ctx.Done():
-				close(work)
-				wg.Wait()
-				return
+				msg.Nack(false, true)
+				break loop
 			}
 		}
 	}
+
+	close(work)
+	wg.Wait()
 }
 
 func (r *RabbitMQ) handleMessage(ctx context.Context, msg amqp.Delivery) {
